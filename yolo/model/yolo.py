@@ -1,7 +1,7 @@
 import math
 
 from oneflow import nn
-
+import oneflow as torch
 from .head import Head
 from .backbone import darknet_pan_backbone
 from .transform import Transformer
@@ -25,29 +25,29 @@ class YOLOv5(nn.Module):
             [[122.1, 78.3], [73.7, 143.8], [236.1, 213.1]],
         ]
         loss_weights = {"loss_box": 0.05, "loss_obj": 1.0, "loss_cls": 0.5}
-        
+
         self.backbone = darknet_pan_backbone(
-            depth_multiple=model_size[0], width_multiple=model_size[1]) # 7.5M parameters
-        
+            depth_multiple=model_size[0], width_multiple=model_size[1])  # 7.5M parameters
+
         in_channels_list = self.backbone.body.out_channels_list
         strides = (8, 16, 32)
         num_anchors = [len(s) for s in anchors]
         predictor = Predictor(in_channels_list, num_anchors, num_classes, strides)
-        
+
         self.head = Head(
-            predictor, anchors, strides, 
-            match_thresh, giou_ratio, loss_weights, 
+            predictor, anchors, strides,
+            match_thresh, giou_ratio, loss_weights,
             score_thresh, nms_thresh, detections)
-        
+
         if isinstance(img_sizes, int):
             img_sizes = (img_sizes, img_sizes)
         self.transformer = Transformer(
             min_size=img_sizes[0], max_size=img_sizes[1], stride=max(strides))
-    
+
     def forward(self, images, targets=None):
         images, targets, scale_factors, image_shapes = self.transformer(images, targets)
         features = self.backbone(images)
-        
+
         if self.training:
             losses = self.head(features, targets)
             return losses
@@ -55,7 +55,7 @@ class YOLOv5(nn.Module):
             max_size = max(images.shape[2:])
             results, losses = self.head(features, targets, image_shapes, scale_factors, max_size)
             return results, losses
-        
+
     def fuse(self):
         # fusing conv and bn layers
         for m in self.modules():
@@ -68,12 +68,12 @@ class Predictor(nn.Module):
         super().__init__()
         self.num_outputs = num_classes + 5
         self.mlp = nn.ModuleList()
-        
+
         for in_channels, n in zip(in_channels_list, num_anchors):
             out_channels = n * self.num_outputs
             self.mlp.append(nn.Conv2d(in_channels, out_channels, 1))
-            
-        #for m in self.modules():
+
+        # for m in self.modules():
         #    if isinstance(m, nn.Conv2d):
         #        nn.init.kaiming_normal_(m.weight, mode="fan_out", nonlinearity="leaky_relu")
         for m, n, s in zip(self.mlp, num_anchors, strides):
@@ -81,7 +81,7 @@ class Predictor(nn.Module):
             b[:, 4] += math.log(8 / (416 / s) ** 2)
             b[:, 5:] += math.log(0.6 / (num_classes - 0.99))
             m.bias = nn.Parameter(b.view(-1))
-            
+
     def forward(self, x):
         N = x[0].shape[0]
         L = self.num_outputs
@@ -92,5 +92,28 @@ class Predictor(nn.Module):
             pred = pred.permute(0, 2, 3, 1).reshape(N, h, w, -1, L)
             preds.append(pred)
         return preds
-    
-    
+
+
+class YOLOv5_for_Graph(nn.Module):
+    def __init__(self, num_classes, model_size=(0.33, 0.5),
+                 match_thresh=4, giou_ratio=1, img_sizes=(320, 416),
+                 score_thresh=0.1, nms_thresh=0.6, detections=100):
+        super().__init__()
+        self.yolov5 = YOLOv5(num_classes, model_size=(0.33, 0.5),
+                             match_thresh=4, giou_ratio=1, img_sizes=(320, 416),
+                             score_thresh=0.1, nms_thresh=0.6, detections=100)
+
+    def forward(self, images, targets=None):
+        images, targets, scale_factors, image_shapes = self.yolov5.transformer(images, targets=None)
+        features = self.yolov5.backbone(images)
+        preds = self.yolov5.head.predictor(features)
+        return preds
+
+
+class Graph_YOLOv5(nn.Graph):
+    def __init__(self, Graph_YOLOv5):
+        super().__init__()
+        self.model = yolov5
+
+    def build(self, x):
+        return self.model(x[0], x[1])

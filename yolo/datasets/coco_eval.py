@@ -3,7 +3,7 @@ import oneflow as torch
 
 from pycocotools.cocoeval import COCOeval
 from pycocotools.coco import COCO
-
+import numpy as np
 
 class CocoEvaluator:
     def __init__(self, coco_gt, iou_types="bbox"):
@@ -51,7 +51,11 @@ def prepare_for_coco(predictions, ann_labels):
 
         # convert to coco bbox format: xmin, ymin, w, h
         boxes = prediction["boxes"]
-        x1, y1, x2, y2 = boxes.unbind(1)
+        print(boxes)
+        x1 = boxes[:,0]
+        y1 = boxes[:,1]
+        x2 = boxes[:,2]
+        y2 = boxes[:,3]
         boxes = torch.stack((x1, y1, x2 - x1, y2 - y1), dim=1)
 
         boxes = boxes.tolist()

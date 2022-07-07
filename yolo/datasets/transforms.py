@@ -4,7 +4,6 @@ from PIL import Image
 
 import numpy as np
 import oneflow as torch
-import oneflow.nn.functional as F
 
 __all__ = ["RandomAffine"]
 

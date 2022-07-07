@@ -1,33 +1,23 @@
 import math
 
 import oneflow as torch
-
-
-    
 def size_matched_idx(wh1, wh2, thresh):
-    #area1 = wh1.prod(1)
-    #area2 = wh2.prod(1)
-    
-    #wh = torch.min(wh1[:, None], wh2[None])
-    #inter = wh.prod(2)
-    #iou = inter / (area1[:, None] + area2 - inter)
-    #return torch.where(iou > thresh)
-    
+
     ratios = wh1[:, None] / wh2[None]
     max_ratios = torch.max(ratios, 1. / ratios).max(2)[0]
-    return torch.where(max_ratios < thresh)
+    return torch.nonzero(max_ratios < thresh, as_tuple=True)
 
 
 def assign_targets_to_proposals(xy, size, overlap=0.5):
     x, y = xy.T
 #    ids = [torch.arange(len(xy), device=xy.device)]
-    ids = [torch.Tensor([0,1]).int()]
+    ids = [torch.Tensor([i for i in range(len(xy))]).int().to(x.device)]
     ids.append(torch.where((x > 1) & (x % 1 < overlap))[0]) # lt_x
     ids.append(torch.where((y > 1) & (y % 1 < overlap))[0]) # lt_y
     ids.append(torch.where((x < size[1] - 1) & (x % 1 > (1 - overlap)))[0]) # rb_x
     ids.append(torch.where((y < size[0] - 1) & (y % 1 > (1 - overlap)))[0]) # rb_y
 
-    offsets = torch.Tensor([[0, 0], [-overlap, 0], [0, -overlap], [overlap, 0], [0, overlap]]) # TODO new_tensor替代
+    offsets = torch.Tensor([[0, 0], [-overlap, 0], [0, -overlap], [overlap, 0], [0, overlap]]).to(x.device) # TODO new_tensor替代
     coordinates = torch.cat([xy[ids[i]] + offsets[i] for i in range(5)]).long()
     return torch.cat(ids), coordinates
 
@@ -93,7 +83,7 @@ def box_iou(box1, box2): # box format: (x1, y1, x2, y2)
     
     
 def nms(boxes, scores, threshold):
-    return torch.ops.torchvision.nms(boxes, scores, threshold)
+    return torch.nms(boxes, scores, threshold)
 
 
 def batched_nms(boxes, scores, labels, threshold, max_size): # boxes format: (x1, y1, x2, y2)

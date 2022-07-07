@@ -1,4 +1,4 @@
-from .model import YOLOv5
+from .model import YOLOv5,Graph_YOLOv5,YOLOv5_for_Graph
 from .datasets import *
 from .engine import train_one_epoch, evaluate
 from .distributed import init_distributed_mode, get_rank, get_world_size
@@ -10,9 +10,8 @@ try:
 except ImportError:
     pass
 
-DALI = False
-try:
-    import nvidia.dali
-    DALI = True
+
 except ImportError:
     pass
+
+

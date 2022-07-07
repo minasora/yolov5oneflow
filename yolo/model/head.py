@@ -1,7 +1,6 @@
 import oneflow as torch
 import oneflow.nn.functional as F
 from oneflow import nn
-
 from . import box_ops
 
 
@@ -25,7 +24,7 @@ class Head(nn.Module):
         self.merge = False
         self.eval_with_loss = False
         #self.min_size = 2
-        
+
     def forward(self, features, targets, image_shapes=None, scale_factors=None, max_size=None):
         preds = self.predictor(features)
         
@@ -39,19 +38,21 @@ class Head(nn.Module):
                 
             results = self.inference(preds, image_shapes, scale_factors, max_size)
             return results, losses
-        
+
     def compute_loss(self, preds, targets):
         dtype = preds[0].dtype
-        for tgt in targets:
-            image_ids = torch.cat([torch.full(tgt["labels"].size(), i)
-                                       for i, tgt in enumerate(targets)])
-            gt_labels = torch.cat([tgt["labels"] for tgt in targets])
-            gt_boxes = torch.cat([tgt["boxes"] for tgt in targets])
-            gt_boxes = box_ops.xyxy2cxcywh(gt_boxes)
+
+        image_ids = torch.cat([torch.full(tgt["labels"].shape, i)
+                                   for i, tgt in enumerate(targets)]).to(preds[0].device)
+        gt_labels = torch.cat([tgt["labels"] for tgt in targets]).to(preds[0].device)
+        gt_boxes = torch.cat([tgt["boxes"] for tgt in targets]).to(preds[0].device)
+        gt_boxes = box_ops.xyxy2cxcywh(gt_boxes)
         losses = {
-            "loss_box": torch.zeros(1,),
-            "loss_obj": torch.zeros(1,),
-            "loss_cls": torch.zeros(1,)}
+            "loss_box": torch.zeros(1,requires_grad=True).to(gt_boxes.device),
+            "loss_obj": torch.zeros(1,requires_grad=True).to(gt_boxes.device),
+            "loss_cls": torch.zeros(1,requires_grad=True).to(gt_boxes.device)}
+        bceloss = nn.BCEWithLogitsLoss()
+
         for pred, stride, wh in zip(preds, self.strides, self.anchors):
             anchor_id, gt_id = box_ops.size_matched_idx(wh, gt_boxes[:, 2:], self.match_thresh)
 
@@ -60,27 +61,32 @@ class Head(nn.Module):
                 gt_box_xy = gt_boxes[:, :2][gt_id]
                 ids, grid_xy = box_ops.assign_targets_to_proposals(gt_box_xy / stride, pred.shape[1:3])
                 anchor_id, gt_id = anchor_id[ids], gt_id[ids]
-                image_id = image_ids[gt_id].long()
-                anchor_id = anchor_id.long()
-                grid_xy = grid_xy.long()
-                
-                pred_level = pred[image_id, grid_xy[:, 1], grid_xy[:, 0], anchor_id]
-                xy = 2 * torch.sigmoid(pred_level[:, :2]) - 0.5 + grid_xy
-                wh = 4 * torch.sigmoid(pred_level[:, 2:4]) ** 2 * wh[anchor_id] / stride
+
+
+
+                image_id = image_ids[gt_id]
+                pred_level = pred[image_id, grid_xy[:, 1], grid_xy[:, 0], anchor_id.long()]
+                xy = 2 *  F.sigmoid(pred_level[:, 0:2]) - 0.5 + grid_xy
+                wh = 4 *  F.sigmoid(pred_level[:, 2:4]) ** 2 * wh[anchor_id] / stride
+
                 box_grid = torch.cat((xy, wh), dim=1)
                 giou = box_ops.box_giou(box_grid, gt_boxes[gt_id] / stride).to(dtype)
-                losses["loss_box"] += (1 - giou).mean()
-                
-                gt_object[image_id, grid_xy[:, 1], grid_xy[:, 0], anchor_id] = \
+                losses["loss_box"] = (1 - giou).mean() + losses["loss_box"]
+
+                gt_object[image_id.long(), grid_xy[:, 1], grid_xy[:, 0], anchor_id.long()] = \
                 self.giou_ratio * giou.detach().clamp(0) + (1 - self.giou_ratio)
-                
+
                 #pos = 1 - 0.5 * self.eps
                 #neg = 1 - pos
+
                 gt_label = torch.zeros_like(pred_level[..., 5:])
-                gt_label[range(len(gt_id)), gt_labels[gt_id]] = 1
-                bceloss = nn.BCEWithLogitsLoss()
-                losses["loss_cls"] += bceloss(pred_level[..., 5:], gt_label)
-                losses["loss_obj"] += bceloss(pred[..., 4], gt_object)
+                for i in range(len(gt_id)):
+                    for j in range(len(gt_id)):
+                        gt_label[j, int(gt_labels[gt_id[i]])] = 1
+
+                losses["loss_cls"] = bceloss(pred_level[..., 5:], gt_label) + losses["loss_cls"]
+            losses["loss_obj"] = bceloss(pred[..., 4], gt_object) + losses["loss_obj"]
+
 
         losses = {k: v * self.loss_weights[k] for k, v in losses.items()}
         return losses
@@ -91,22 +97,19 @@ class Head(nn.Module):
             pred = torch.sigmoid(pred)
             n, y, x, a = torch.where(pred[..., 4] > self.score_thresh)
             p = pred[n, y, x, a]
-            
-            xy = torch.stack((x, y), dim=1)
+            xy = torch.stack((x, y), dim=1).to(torch.device('cuda'))
             xy = (2 * p[:, :2] - 0.5 + xy) * stride
             wh = 4 * p[:, 2:4] ** 2 * wh[a]
-            box = torch.cat((xy, wh), dim=1)
+            box = torch.cat((xy.float().to(torch.device('cuda')), wh.float()), dim=1)
             
             ids.append(n)
             ps.append(p)
             boxes.append(box)
-            
         ids = torch.cat(ids)
         ps = torch.cat(ps)
         boxes = torch.cat(boxes)
-        
         boxes = box_ops.cxcywh2xyxy(boxes)
-        logits = ps[:, [4]] * ps[:, 5:]
+        logits = ps[:, 4:5] * ps[:, 5:]
         indices, labels = torch.where(logits > self.score_thresh) # 4.94s
         ids, boxes, scores = ids[indices], boxes[indices], logits[indices, labels]
         

@@ -15,14 +15,11 @@ __all__ = ["setup_seed", "save_ckpt", "Meter", "ModelEMA", "find_ckpts",
 
 def setup_seed(seed):
     torch.manual_seed(seed)
-    random.seed(seed)
+    torch.cuda.manual_seed_all(seed)
     np.random.seed(seed)
-    if seed == 0:
-        torch.backends.cudnn.deterministic = True
-        torch.backends.cudnn.benchmark = False
-    else:
-        torch.backends.cudnn.deterministic = False
-        torch.backends.cudnn.benchmark = True
+    random.seed(seed)
+    torch.backends.cudnn.deterministic = True
+
     
 
 def save_ckpt(model, optimizer, epochs, path, **kwargs):

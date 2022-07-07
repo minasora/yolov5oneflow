@@ -69,10 +69,11 @@ class Transformer(nn.Module):
             size = [round(s * scale_factor) for s in orig_image_shape]
             image = F.interpolate(torch.tensor(image[None]), size=size, mode="bilinear", align_corners=False)[0]
             if target is not None:
-                box = target["boxes"]
-
-  #   TODO           box[:, [0, 2]] *= size[1] / orig_image_shape[1]
-  #              box[:, [1, 3]] *= size[0] / orig_image_shape[0]
+               box = target["boxes"]
+               box[:, 0] *= size[1] / orig_image_shape[1]
+               box[:, 2] *= size[1] / orig_image_shape[1]
+               box[:, 1] *= size[0] / orig_image_shape[0]
+               box[:, 3] *= size[0] / orig_image_shape[0]
         return image, target, scale_factor
     
     def batch_images(self, images):
@@ -80,13 +81,10 @@ class Transformer(nn.Module):
         batch_size = tuple(math.ceil(m / self.stride) * self.stride for m in max_size)
 
         batch_shape = (len(images), 3,) + batch_size
-        batched_imgs = torch.full(batch_shape, 0)
-
-   #     for img, pad_img in zip(images, batched_imgs):
-
-     #       pad_img[:, :img.shape[1], :img.shape[2]].copy_(img)
-
-        return torch.Tensor(batched_imgs)
+        batched_imgs = torch.full(batch_shape, 0.)
+        for img, pad_img in zip(images, batched_imgs):
+            pad_img[:, :img.shape[1], :img.shape[2]] = img
+        return torch.Tensor(batched_imgs).to(torch.device("cuda:0"))
         
         
 def sort_images(shapes, out, dim):

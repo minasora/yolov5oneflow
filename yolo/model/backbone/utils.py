@@ -67,7 +67,7 @@ class Conv(nn.Module):
         if not self.training and self.fused:
             return self.acti(self.fused_conv[0](x))
         else :
-            return self.acti(self.bn(self.conv(x.float())))
+            return self.acti(self.bn(self.conv(x)))
             
     def fuse(self):
         self.fused = True
@@ -101,7 +101,7 @@ class ConcatBlock(nn.Module):
         self.part2 = nn.Conv2d(in_channels, mid_channels, 1, bias=False)
         self.tail = nn.Sequential(
             nn.BatchNorm2d(2 * mid_channels, eps=bn_eps, momentum=bn_momentum),
- #          nn.LeakyReLU(0.1),
+            nn.LeakyReLU(0.1,inplace=True)
         )
         
         self.conv = Conv(2 * mid_channels, out_channels, 1)
@@ -109,7 +109,8 @@ class ConcatBlock(nn.Module):
     def forward(self, x):
         x1 = self.part1(x)
         x2 = self.part2(x)
-        out = self.conv(self.tail(torch.cat((x1, x2), dim=1)))
+        x3 = self.tail(torch.cat((x1, x2), dim=1))
+        out = self.conv(x3)
         return out
     
     

@@ -3,7 +3,7 @@ import math
 import os
 import re
 import time
-
+import torch as pytorch
 import oneflow as torch
 
 import yolo
@@ -11,6 +11,8 @@ import yolo
 import faulthandler
 def main(args):
     # Prepare for distributed training
+    yolo.setup_seed(args.seed)
+    args.distributed = False
     yolo.init_distributed_mode(args)
     begin_time = time.time()
     print(time.asctime(time.localtime(begin_time)))
@@ -35,7 +37,7 @@ def main(args):
     
     # The code below is for COCO 2017 dataset
     # If you're using VOC dataset or COCO 2012 dataset, remember to revise the code
-    splits = ("train", "val")
+    splits = ("train", "train")
     file_roots = [os.path.join(args.data_dir, x) for x in splits]
     ann_files = [os.path.join(args.data_dir, "{}.json".format(x)) for x in splits]
     if DALI:
@@ -60,7 +62,7 @@ def main(args):
             sampler_train = torch.utils.data.distributed.DistributedSampler(dataset_train)
             sampler_test = torch.utils.data.distributed.DistributedSampler(dataset_test)
         else:
-            sampler_train = torch.utils.data.RandomSampler(dataset_train)
+            sampler_train = torch.utils.data.SequentialSampler(dataset_train)
             sampler_test = torch.utils.data.SequentialSampler(dataset_test)
 
         batch_sampler_train = yolo.GroupedBatchSampler(
@@ -68,7 +70,7 @@ def main(args):
         batch_sampler_test = yolo.GroupedBatchSampler(
             sampler_test, dataset_test.aspect_ratios, args.batch_size)
 
-        args.num_workers = min(os.cpu_count() // 2, 8, args.batch_size if args.batch_size > 1 else 0)
+        args.num_workers = 0
         data_loader_train = torch.utils.data.DataLoader(
             dataset_train, batch_sampler=batch_sampler_train, num_workers=args.num_workers,
             collate_fn=yolo.collate_wrapper)
@@ -87,11 +89,12 @@ def main(args):
     # -------------------------------------------------------------------------- #
 
     print(args)
-    yolo.setup_seed(args.seed)
+
     
     model_sizes = {"small": (0.33, 0.5), "medium": (0.67, 0.75), "large": (1, 1), "extreme": (1.33, 1.25)}
-    num_classes = len(d_train.dataset.classes)
-    model = yolo.YOLOv5(num_classes, model_sizes[args.model_size], img_sizes=args.img_sizes)
+    #    num_classes = len(d_train.dataset.classes)
+    num_classes = 80
+    model = yolo.YOLOv5(num_classes, model_sizes[args.model_size], img_sizes=args.img_sizes).to(device)
     model.transformer.mosaic = args.mosaic
     
     model_without_ddp = model
@@ -132,7 +135,15 @@ def main(args):
         ema_without_ddp.load_state_dict(checkpoint["ema"][0])
         ema.updates = checkpoint["ema"][1]
         del checkpoint
-        if cuda: torch.cuda.empty_cache()
+    parameters = pytorch.load("yolov5s.pth")
+    new_parameters = dict()
+    for key, value in parameters.items():
+        if "num_batches_tracked" not in key:
+            val = value.detach().cpu().numpy()
+            val = torch.from_numpy(val).float()
+            new_parameters[key] = val
+    model.load_state_dict(new_parameters)
+#    if cuda: torch.cuda.empty_cache()
 
     since = time.time()
     print("\nalready trained: {} epochs; to {} epochs".format(start_epoch, args.epochs))
@@ -181,7 +192,7 @@ def main(args):
     
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--use-cuda", action="store_true") # whether use the GPU
+    parser.add_argument("--use-cuda", action="store_true",default="True") # whether use the GPU
     
     parser.add_argument("--dataset", default="coco") # style of dataset, choice: ["coco", "voc"]
     parser.add_argument("--data-dir", default="data/anime") # root directory of the dataset
@@ -191,19 +202,19 @@ if __name__ == "__main__":
     
     # you may not train the model for 273 epochs once, and want to split it into several tasks.
     # set epochs={the target epoch of each training task}
-    parser.add_argument("--epochs", type=int, default=5)
+    parser.add_argument("--epochs", type=int, default=1)
     
     # total epochs. iterations=500000, true batch size=64, so total epochs=272.93
     parser.add_argument("--period", type=int, default=273) 
-    parser.add_argument("--batch-size", type=int, default=2)
+    parser.add_argument("--batch-size", type=int, default=1)
     parser.add_argument("--iters", type=int, default=-1) # max iterations per epoch, -1 denotes an entire epoch
     
     parser.add_argument("--seed", type=int, default=3) # random seed
     parser.add_argument("--model-size", default="small") # choice: ["small", "medium", "large", "extreme"]
-    parser.add_argument('--img-sizes', nargs="+", type=int, default=[320, 416]) # range of input images' max_size during training
-    parser.add_argument("--lr", type=float, default=0.01)
-    parser.add_argument("--momentum", type=float, default=0.937)
-    parser.add_argument("--weight-decay", type=float, default=0.0005)
+    parser.add_argument('--img-sizes', nargs="+", type=int, default=[320, 320]) # range of input images' max_size during training
+    parser.add_argument("--lr", type=float, default=0.001)
+    parser.add_argument("--momentum", type=float, default=0)
+    parser.add_argument("--weight-decay", type=float, default=0)
     
     parser.add_argument("--mosaic", action="store_true") # mosaic data augmentaion, increasing ~2% AP, a little slow
     parser.add_argument("--print-freq", type=int, default=100) # frequency of printing losses during training

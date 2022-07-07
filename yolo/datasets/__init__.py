@@ -6,7 +6,3 @@ try:
 except ImportError:
     pass
  
-try:
-    from .dali import DALICOCODataLoader
-except ImportError:
-    pass
